@@ -1,0 +1,157 @@
+## Discritized Table {.unnumbered}
+
+
+```{r setup r and sql, echo=FALSE}
+#| warning: false
+#| echo: false
+library(readr)
+library(tidyverse)
+library(janitor)
+library(gt)
+library(DBI)
+library(duckdb)
+options(duckdb.enable_rstudio_connection_pane=TRUE)
+
+drv <- duckdb()
+con <- dbConnect(drv)
+library(reticulate)
+# py_install("pandas")
+```
+
+```{python setup python, echo=FALSE, results=FALSE}
+import pandas as pd
+import numpy as np
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+```
+
+```{r, include=FALSE}
+spotify_cleaned <- readRDS("working_tables/spotify_cleaned.rds")
+tiktok_cleaned <- readRDS("working_tables/tiktok_cleaned.rds")
+billboard_cleaned <- readRDS("working_tables/billboard_cleaned.rds")
+combined_cleaned <- readRDS("working_tables/combined_cleaned.rds")
+```
+
+```{sql, include=FALSE}
+#| connection: con
+CREATE OR REPLACE TABLE spotify_cleaned AS
+  SELECT * FROM 'working_tables/spotify_cleaned_sql.csv';
+CREATE OR REPLACE TABLE tiktok_cleaned AS
+  SELECT * FROM 'working_tables/tiktok_cleaned_sql.csv';
+CREATE OR REPLACE TABLE billboard_cleaned AS
+  SELECT * FROM 'working_tables/billboard_cleaned_sql.csv';
+CREATE OR REPLACE TABLE combined_cleaned AS
+  SELECT * FROM 'working_tables/combined_cleaned_sql.csv';
+```
+
+```{python, include=FALSE}
+spotify_cleaned = pd.read_csv("working_tables/spotify_cleaned_py.csv")
+tiktok_cleaned = pd.read_csv("working_tables/tiktok_cleaned_py.csv")
+billboard_cleaned = pd.read_csv("working_tables/billboard_cleaned_py.csv")
+combined = pd.read_csv("working_tables/combined_py.csv")
+```
+
+
+
+--------------------------------------------------------------------------------
+
+As explained earlier, the ranking system for each dataset was slightly different. The rank for songs on the Spotify chart <code>rank_s</code> ranges from 1 to 200. The value is the number that the Spotify algorithm uses to determine popularity. The rank for the TikTok charts <code>rank_t</code> ranges from 0 to 100. The value represents the highest rank on the chart that the song reached. A value of 1 would mean that the song reached the highest place on the chart. The documentation does not describe what a value of 0 means. We assume that it could mean that the song made it to the chart, but did not place highly. The rank for the Billboard chart <code>rank_b</code> ranges from 1 to 100. A value of 1 means that the song was ranked the highest on the chart and a value of 100 means that the song was last on the chart. Because these ranking systems are different, we created a table that has discretized values rather than numbers.
+
+The term "Most popular" was applied to the 10% most popular songs on each chart, "Popular" to the top 50%, and "On chart" to the remaining values that were not NA.
+
+### Discretizing the Tables
+
+::: panel-tabset
+
+#### R
+
+This code calculates the percent rank for rank_s, rank_t, and rank_b, then uses a <code>case_when</code> to assign a label to each value. 
+
+```{r}
+combined_discretized <- combined_cleaned |> 
+# Spotify
+  mutate(rank_s_percent = percent_rank(rank_s)) |> # get the percent rank for each observation
+  mutate(rank_s_label = case_when( # spotify rank_s shows the highest the song reached on the chart (lower number = more popular)
+    rank_s_percent < 0.10 ~ "Most popular",
+    rank_s_percent <= 0.50 ~ "Popular",
+    rank_s_percent > 0.50 ~ "On chart"
+    )) |>
+  
+#TikTok
+  mutate(rank_t_percent = percent_rank(rank_t)) |> # get the percent rank for each observation
+  mutate(rank_t_label = case_when( # tiktok rank_t shows the value that the algorithm eats (higher number = more popular)
+    rank_t_percent > 0.90 ~ "Most popular",
+    rank_t_percent >= 0.50 ~ "Popular",
+    rank_t_percent < 0.50 ~ "On chart"
+    )) |>
+
+#Billboard
+  mutate(rank_b_percent = percent_rank(rank_b)) |> # get the percent rank for each observation
+  mutate(rank_b_label = case_when( # billboard rank_b shows the rank (lower number = high rank)
+    rank_b_percent < 0.10 ~ "Most popular",
+    rank_b_percent <= 0.50 ~ "Popular",
+    rank_b_percent > 0.50 ~ "On chart"
+    )) |>
+  
+  select(song_title, artist, rank_s, rank_s_label, rank_t, rank_t_label, rank_b, rank_b_label, tempo)
+```
+
+#### SQL
+
+The function <code>percent_rank</code> is the relative position of the value in the sorted dataset. The statements below use <code>percent_rank</code> to determine if a song is the top x% and classifies the song accordingly. First a temporary table is made with the labels for the rank_s column. Then the labels for rank_t are added to that table, creating yet another temporary table in the process. Finally the labels for rank_b are added and the result is the final discretized table. 
+
+```{sql}
+#| connection: con
+--Spotify labels
+CREATE OR REPLACE TEMP TABLE disc_s AS
+  SELECT *,
+         percent_rank() OVER (ORDER BY rank_s) AS rank_s_percent,
+     CASE 
+         WHEN rank_s_percent < 10 THEN 'Most popular'
+         WHEN percent_rank() OVER (ORDER BY rank_s) <= 50 THEN 'Popular'
+         ELSE 'On chart'
+     END
+    AS rank_s_label
+  FROM combined_cleaned
+;
+
+--TikTok labels added to the table with the Spotify labels
+CREATE OR REPLACE TEMP TABLE disc_s_t AS
+  SELECT *,
+         percent_rank() OVER (ORDER BY rank_t) AS rank_t_percent,
+     CASE 
+         WHEN rank_t_percent > 90 THEN 'Most popular'
+         WHEN percent_rank() OVER (ORDER BY rank_t) >= 50 THEN 'Popular'
+         ELSE 'On chart'
+     END
+    AS rank_t_label
+  FROM disc_s
+
+;
+--Billboard labels added to the table with the Spotify and TikTok labels
+CREATE OR REPLACE TABLE discretized AS
+  SELECT *,
+     percent_rank() OVER (ORDER BY rank_b) AS rank_b_percent,
+     CASE 
+         WHEN rank_b_percent < 10 THEN 'Most popular'
+         WHEN percent_rank() OVER (ORDER BY rank_b) <= 50 THEN 'Popular'
+         ELSE 'On chart'
+     END
+    AS rank_b_label
+  FROM disc_s_t
+```
+
+#### Python
+
+<code>pd.qcut</code> discretizes variables into buckets based on rank or quantiles. In this case, the data is being put into buckets based on the specified quantiles of 0%-10%, 10%-50%, and 50%-100%.
+
+```{python}
+combined['rank_s_label'] = pd.qcut(combined['rank_s'], q=[0, 0.50, 0.90, 1], labels=["On chart", "Popular", "Most popular"])
+combined['rank_t_label'] = pd.qcut(combined['rank_t'], q=[0, 0.10, 0.50, 1], labels=["Most popular", "Popular", "On chart"])
+combined['rank_b_label'] = pd.qcut(combined['rank_b'], q=[0, 0.10, 0.50, 1], labels=["Most popular", "Popular", "On chart"])
+combined
+```
+
+:::
+
+The discretized table makes the data easier to compare in a glance. While the following analysis will use the un-discretized table, this table is helpful in quickly verifying that we have sorted the rows appropriately.

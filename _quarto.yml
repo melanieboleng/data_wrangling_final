@@ -1,0 +1,29 @@
+project:
+  type: book
+
+book:
+  title: "Popular Songs on TikTok and Beyond"
+  author: "Melanie Boleng"
+  date: "6 December 2024"
+  chapters:
+    - index.qmd
+    - cleaning.qmd
+    - joins.qmd
+    - discr.qmd
+    - analysis.qmd
+    - conclusion.qmd
+
+
+format:
+  html:
+    theme: cosmo
+ #   theme: vapor
+    self-contained: true
+    df-print: paged
+  #  css: stylesheet.css
+    code_folding: hide
+    code_summary: "Show the code"
+
+execute:
+  cache: true
+

@@ -1,0 +1,638 @@
+## Cleaning the Data {.unnumbered}
+
+Here is how we loaded and cleaned the data, and the problems that arose in the process.
+
+```{r}
+#| code-fold: true
+#| code-summary: "R and DuckDB Setup"
+#| warning: FALSE
+library(readr)
+library(tidyverse)
+library(janitor)
+library(gt)
+library(reticulate)
+
+library(DBI)
+library(duckdb)
+options(duckdb.enable_rstudio_connection_pane=TRUE)
+
+drv <- duckdb()
+con <- dbConnect(drv)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Python Setup"
+# py_install("pandas")
+import pandas as pd
+import numpy as np
+import great_tables as gt #this makes the python tables look nice
+import warnings #this is to silence a warning about using .replace later in the code
+from great_tables import GT
+warnings.simplefilter(action='ignore', category=FutureWarning)
+```
+
+### Read the Tables from csv Files 
+
+These are the tables before cleaning and combining. Lots of unnecessary columns and inconsistent headings between the tables. Another issue to address is the quotations around the song titles on the Billboard chart. The song titles and artist names are also not consistent across tables. 
+
+::: panel-tabset
+
+#### R
+Reading the csv files is pretty simple in R. <code>read_csv</code> reads the csv and the output can be saved. <code>show_col_types = FALSE</code> hides the console output that shows a count of the rows and columns and if the column is a chr, dbl, etc. 
+```{r reading files}
+#| code-fold: true
+#| code-summary: "Spotify"
+spotify_charts <- read_csv("initial_tables/spotify_top_charts_22.csv", show_col_types = FALSE)
+spotify_charts
+```
+
+```{r}
+#| code-fold: true
+#| code-summary: "TikTok"
+tiktok_charts <- read_csv("initial_tables/TikTok_songs_2022.csv", show_col_types = FALSE)
+tiktok_charts
+```
+
+```{r}
+#| code-fold: true
+#| code-summary: "Billboard"
+billboard_charts <- read_csv("initial_tables/Billboard_hot_100_year_end_2022.csv", show_col_types = FALSE)
+billboard_charts
+```
+
+#### SQL
+This code makes (or replaces) a table from the csv file. <code>SELECT *</code> means that all columns in the csv will be brought over into the table. The tables only show five rows so that they do not take up too much of the page. 
+```{sql}
+#| connection: con
+CREATE OR REPLACE TABLE spotify_charts AS
+  SELECT * FROM 'initial_tables/spotify_top_charts_22.csv';
+```
+
+```{sql}
+#| connection: con
+SELECT * FROM spotify_charts
+LIMIT 5; --only show five rows
+```
+
+```{sql}
+#| connection: con
+CREATE OR REPLACE TABLE tiktok_charts AS
+  SELECT * FROM 'initial_tables/TikTok_songs_2022.csv';
+```
+
+```{sql}
+#| connection: con
+SELECT * FROM tiktok_charts
+LIMIT 5; --only show five rows
+```
+
+```{sql}
+#| connection: con
+CREATE OR REPLACE TABLE billboard_charts AS
+  SELECT * FROM 'initial_tables/Billboard_hot_100_year_end_2022.csv';
+```
+
+```{sql}
+#| connection: con
+SELECT * FROM billboard_charts
+LIMIT 5; --only show five rows
+```
+
+#### Python
+Making the tables in Python is very similar to R. <code>pd.read_csv</code> reads the csv file and returns a DataFrame.
+```{python}
+#| code-fold: true
+#| code-summary: "Billboard"
+spotify_charts = pd.read_csv("initial_tables/spotify_top_charts_22.csv")
+spotify_charts
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Billboard"
+tiktok_charts = pd.read_csv("initial_tables/TikTok_songs_2022.csv")
+tiktok_charts
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Billboard"
+billboard_charts = pd.read_csv("initial_tables/Billboard_hot_100_year_end_2022.csv")
+billboard_charts
+```
+:::
+
+
+### Cleaning
+
+All the tables are messy. Both the Spotify and TikTok tables have columns that are not necessary for this project. To keep the tables simple, we cleaned the data to make all three tables as similar as possible. We renamed all the columns holding the song title to <code>song_title</code>, the artist(s) <code>artist</code>, and the popularity/rank to <code>rank_s/rank_t/rank_b</code> for Spotify, TikTok, and Billboard, respectively. We also included the <code>tempo</code> column on the Spotify and TikTok tables. The quotations are also removed from the song titles in the Billboard chart as well. 
+
+#### Spotify
+For the spotify_charts, we filterd to keep on the the columns containing the song title, artist anme, peak rank, and tempo. We reordered and renamed the columns as follows: song_title, artist, rank_s, and tempo. The <code>rank_s</code> column indicated the highest rank the song appeared on the chart, so a lower number indicated that the song was more popular.
+
+::: panel-tabset
+
+##### R
+For the Spotify data, we used <code>select()</code> to only keep the relevant columns.
+```{r}
+spotify_cleaned <- spotify_charts |> 
+  clean_names() |> #clean the column headers
+  select(track_name, artist_names, peak_rank, tempo) |> #select only certain columns
+  rename(song_title = track_name, artist = artist_names, rank_s = peak_rank) |>
+  arrange(rank_s) #order from most to least popular (lower number = more popular)
+
+spotify_cleaned
+```
+
+##### SQL
+Similar to in R, we used <code>SELECT</code> to only keep the relevant columns and used <code>ORDER BY</code> to arrange the rows from most to least popular. 
+```{sql clean spotify sql}
+#| connection: con
+--select only relevant columns and rename them appropriately
+CREATE OR REPLACE TABLE spotify_cleaned AS
+  SELECT track_name AS song_title, artist_names AS artist, peak_rank AS rank_s, tempo
+  FROM spotify_charts
+;
+--order from most to least popular using the rank_s column (lower number = more popular)
+FROM spotify_cleaned
+ORDER BY rank_s ASC
+```
+
+##### Python
+For the Spotify data, we used <code>.filter</code> to only keep the relevant columns and <code>.sort_values</code> to sort the rows. 
+```{python}
+spotify_cleaned = (spotify_charts
+                   .filter(items = ['track_name', 'artist_names', 'peak_rank', 'tempo'])
+                   .rename(columns = {'track_name': 'song_title',
+                                      'artist_names': 'artist',
+                                      'peak_rank': 'rank_s'})
+                   .sort_values('rank_s') # lower number = higher rank
+                  )
+spotify_cleaned
+```
+
+:::
+
+#### TikTok
+
+Similar to the Spotify dataset, we kept only the relevant columns and renamed them to be the same as the Spotify dataset. The <code>rank_t</code> column indicates the popularity of a song, with a higher value indicating that the song achieved greater popularity.
+
+::: panel-tabset
+
+##### R
+```{r}
+tiktok_cleaned <- tiktok_charts |>
+  clean_names() |> #clean the column headers
+  select(track_name, artist_name, track_pop, tempo) |> #filter for certain columns
+  rename(song_title = track_name, artist = artist_name, rank_t = track_pop) |>
+  arrange(desc(rank_t)) #arrange by popularity (higher number = more popular)
+
+tiktok_cleaned
+```
+
+##### SQL
+```{sql clean tiktok}
+#| connection: con
+--create a cleaned version of the tiktok table and select only relevant columns
+CREATE OR REPLACE TABLE tiktok_cleaned AS
+  SELECT track_name AS song_title, artist_name AS artist, track_pop AS rank_t, tempo
+  FROM tiktok_charts
+;
+--order from most to least popular using the rank_t column
+FROM tiktok_cleaned
+ORDER BY rank_t DESC
+```
+
+##### Python
+```{python}
+tiktok_cleaned = (tiktok_charts
+                   .filter(items = ['track_name', 'artist_name', 'track_pop', 'tempo'])
+                   .rename(columns = {'track_name': 'song_title',
+                                      'artist_name': 'artist',
+                                      'track_pop': 'rank_t'})
+                   .sort_values('rank_t', ascending=False) # higher numbers = more popular
+                  )
+                  
+tiktok_cleaned
+```
+
+:::
+
+#### Billboard
+
+The billboard_chart was almost the same as the previous two tables. The columsn kept are the columns containing the song title, artist, and rank. The columns were named <code>song_title</code>, <code>artist</code>, and <code>rank_b</code>. The <code>rank_b</code> column indicated the rank of the song, with a lower number indicating a song that achieved a higher rank. 
+
+::: panel-tabset
+
+##### R
+```{r}
+billboard_cleaned <- billboard_charts |>
+  clean_names() |> #clean the column headers
+  select(title, artist_s, no) |> #reorder the columns
+  rename(song_title = title, rank_b = no, artist = artist_s) |> 
+  mutate(song_title = str_replace_all(song_title, '"', '')) #take quotations off song titles
+
+billboard_cleaned
+```
+
+##### SQL
+```{sql}
+#| connection: con
+--create a cleaned version of the billboard table and select only renamed relevant columns
+CREATE OR REPLACE TABLE billboard_cleaned AS
+  SELECT replace(title, '"', '') AS song_title, "artist(s)" AS artist, "no." AS rank_b
+  FROM billboard_charts
+;
+--order from most to least popular using the rank_b column
+FROM billboard_cleaned
+ORDER BY rank_b
+```
+
+##### Python
+```{python}
+billboard_cleaned = (billboard_charts
+                   .rename(columns = {'Title': 'song_title',
+                                      'Artist(s)': 'artist',
+                                      'No.': 'rank_b'})
+                   .sort_values('rank_b') # highest to lowest rank
+                  )
+billboard_cleaned['song_title'] = billboard_cleaned['song_title'].str.replace('"', '')
+
+billboard_cleaned
+```
+:::
+
+## Challenges
+
+Two challenges stood out to us, both involving the variations in the way that the song metadata is recorded on the charts. The same song can appear on different albums with slgiht variations of the title, or can have a featured artist listed in the title or as an additional artist, or could be a cover of another song, etc. As an example, the song "Enemy" by Imagine Dragons appears twice on the Spotify chart, once on the TikTok chart, and once on the Billboard chart:
+
+::: panel-tabset
+
+#### R
+```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
+spotify_cleaned |>
+  filter(str_detect(song_title, 'Enemy')) #filter for song titles containing "Enemy"
+tiktok_cleaned |>
+  filter(str_detect(song_title, 'Enemy'))
+billboard_cleaned |>
+  filter(str_detect(song_title, 'Enemy'))
+```
+#### SQL
+```{sql Enemy on the S Charts}
+#| connection: con
+#| code-fold: true
+#| code-summary: "Spotify"
+SELECT *
+FROM spotify_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+```{sql Enemy on the T Charts}
+#| connection: con
+#| code-fold: true
+#| code-summary: "TikTok"
+SELECT *
+FROM tiktok_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+```{sql Enemy on the B Charts}
+#| connection: con
+#| code-fold: true
+#| code-summary: "Billboard"
+SELECT *
+FROM billboard_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+#### Python
+```{python}
+#| code-fold: true
+#| code-summary: "Show the code"
+GT(spotify_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+GT(tiktok_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+GT(billboard_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+```
+
+:::
+
+All three charts record the song title differently. The Spotify chart has two different versions of "Enemy" on it: one with JID and one without, so leaving those titles as is is fine. The TikTok and Billboard charts both have the version with JID, but the name of the song and artists listed are different. To handle these synonyms, we created a lookup table and applied it to each dataset. We chose to apply the dictionary to each individual table rather than a combined table so that when we combine the tables, songs with the same title and artists would be combined. The tables for the song titles and artist names were created in Google Sheets and uploaded to RStudio as csv files.
+
+### Change Song Titles
+
+The process in the three languages was essentially the same. We read the csv file and stored the resulting table. Then we merged/joined the lookup table with each chart. The lookup table has two columns: one containing the canonical names and another containing the alternative names. 
+
+::: panel-tabset
+
+#### R
+
+Read the lookup table. 
+```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
+song_title_lookup <- read_csv("initial_tables/dict_song_titles.csv", show_col_types = FALSE)
+song_title_lookup
+```
+
+We used a <code>left_join</code> and joined on the <code>song_title</code> column of the song chart on the <code>alt_name</code> column of the lookup table. This join created a new column called <code>canonical_name</code> on the chart. <code>mutate</code> is used to replace the value in the song_title columns with the name in the <code>canonical_name</code>, if there is one. <code>coalesce</code> takes the first non-null value, so if the <code>canonical_name</code> column is empty, then the song title will not be replaced. 
+
+```{r}
+spotify_cleaned <- spotify_cleaned |>
+  left_join(song_title_lookup, by = join_by(song_title == alt_name)) |>
+  mutate(song_title = coalesce(canonical_name, song_title)) |> #coalesce takes the first non-null value
+  select(song_title, artist, rank_s, tempo) #keep only relevant columns
+```
+
+```{r}
+tiktok_cleaned <- tiktok_cleaned |>
+  left_join(song_title_lookup, by = join_by(song_title == alt_name)) |>
+  mutate(song_title = coalesce(canonical_name, song_title)) |>
+  select(song_title, artist, rank_t, tempo)
+```
+
+```{r}
+billboard_cleaned <- billboard_cleaned |>
+  left_join(song_title_lookup, by = join_by(song_title == alt_name)) |> 
+  mutate(song_title = coalesce(canonical_name, song_title)) |>
+  select(song_title, artist, rank_b)
+```
+
+#### SQL
+
+Read the look table csv and create a table.
+
+```{sql}
+#| connection: con
+CREATE OR REPLACE TABLE song_title_lookup AS
+  SELECT * 
+  FROM 'initial_tables/dict_song_titles.csv';
+```
+
+We used <code>UPDATE</code> to avoid having to coalesce columns. This code checks if a song listed in the song title column in the chart is the same as a song listed in the alt_name column of the lookup table. If there is a match, then the song title is replaced with the song from the canonical_name column of the lookup table.  
+
+```{sql}
+#| connection: con
+UPDATE spotify_cleaned
+  SET song_title = song_title_lookup.canonical_name
+  FROM song_title_lookup
+  WHERE spotify_cleaned.song_title = song_title_lookup.alt_name
+```
+
+```{sql}
+#| connection: con
+UPDATE tiktok_cleaned
+  SET song_title = song_title_lookup.canonical_name
+  FROM song_title_lookup
+  WHERE tiktok_cleaned.song_title = song_title_lookup.alt_name
+```
+
+```{sql}
+#| connection: con
+UPDATE billboard_cleaned
+  SET song_title = song_title_lookup.canonical_name
+  FROM song_title_lookup
+  WHERE billboard_cleaned.song_title = song_title_lookup.alt_name
+```
+
+#### Python w/ Merge
+
+We have two different methods in Python here. This method uses <code>.merge</code> and is similar to the R version. The lookup table csv file is read. Then the chart table and the lookup table are left-merged on the song_title and alt_name. This creates two new columns in the chart called canonical_name and alt_name. If there is a value in the alt_name columns, the the value from the canonical_name column replaces the song_title. 
+
+```{python}
+song_syn = pd.read_csv('initial_tables/dict_song_titles.csv')
+
+# Spotify
+spotify_cleaned = spotify_cleaned.merge(song_syn, left_on = 'song_title', right_on = 'alt_name', how = 'left')
+
+spotify_cleaned['song_title'] = np.where( #if the alt_name column has a value then, replace song_title with canonical_name
+   spotify_cleaned['alt_name'].notna(), 
+   spotify_cleaned['canonical_name'], 
+   spotify_cleaned['song_title'])
+   
+spotify_cleaned = spotify_cleaned.drop(columns = ['canonical_name', 'alt_name']) # remove unnecessary columns
+
+
+# TikTok
+tiktok_cleaned = tiktok_cleaned.merge(song_syn, left_on = 'song_title', right_on = 'alt_name', how = 'left')
+
+tiktok_cleaned['song_title'] = np.where(
+   tiktok_cleaned['alt_name'].notna(), 
+   tiktok_cleaned['canonical_name'], 
+   tiktok_cleaned['song_title'])
+   
+tiktok_cleaned = tiktok_cleaned.drop(columns = ['canonical_name', 'alt_name'])
+
+
+# Billboard
+billboard_cleaned = billboard_cleaned.merge(song_syn, left_on = 'song_title', right_on = 'alt_name', how = 'left')
+
+billboard_cleaned['song_title'] = np.where(
+   billboard_cleaned['alt_name'].notna(), 
+   billboard_cleaned['canonical_name'], 
+   billboard_cleaned['song_title'])
+   
+billboard_cleaned = billboard_cleaned.drop(columns = ['canonical_name', 'alt_name'])
+```
+
+#### Python w/ Replace
+
+The second Python method uses <code>.replace</code>. This method was my initial inclination regarding how to recode the charts, but is not the best appraoch to this problem. This method works be converting the lookup table csv file into a dictionary of keys and values. The alt_name column is set as the index and is mapped to the canonical_name column. <code>to_dict</code> converts the result to a dictionary. 
+
+<code>.replace</code> looks for the song title in the keys of the dictionary and replaces the song_title with the canonical name from the dictionary. <code>inplace</code> modifies the original DataFrame directly. Using it spits out a "future warning" because there are planned changes for <code>inplace</code>.
+
+```{python}
+# import the table and convert to a dictionary using to.dict()
+song_title_dict = pd.read_csv('initial_tables/dict_song_titles.csv', header=0).set_index('alt_name')['canonical_name'].to_dict()
+
+# replace the song_title with the canonical_name
+spotify_cleaned['song_title'].replace(song_title_dict, inplace = True)
+tiktok_cleaned['song_title'].replace(song_title_dict, inplace = True)
+billboard_cleaned['song_title'].replace(song_title_dict, inplace = True)
+```
+
+:::
+
+### Change Artist Names
+
+The we did the exact same thing but for the artist names. The lookup table in this instance had two columns: canonical_name and alt_name. The process was essentially the same as changing the song titles. 
+
+::: panel-tabset
+
+#### R
+```{r import name dictionary}
+dict_artist <- read_csv("initial_tables/dict_artist.csv", show_col_types = FALSE)
+dict_artist
+```
+
+```{r}
+spotify_cleaned <- spotify_cleaned |>
+  left_join(dict_artist, by = join_by(artist == alt_name)) |>
+  mutate(song_title = coalesce(canonical_name, song_title)) |>
+  select(song_title, artist, rank_s, tempo)
+```
+
+```{r}
+tiktok_cleaned <- tiktok_cleaned |>
+  left_join(dict_artist, by = join_by(artist == alt_name)) |>
+  mutate(song_title = coalesce(canonical_name, song_title)) |>
+  select(song_title, artist, rank_t, tempo)
+```
+
+```{r}
+billboard_cleaned <- billboard_cleaned |>
+  left_join(dict_artist, by = join_by(artist == alt_name)) |>
+  mutate(song_title = coalesce(canonical_name, song_title)) |>
+  select(song_title, artist, rank_b)
+```
+
+```{r, include=FALSE}
+saveRDS(spotify_cleaned, "working_tables/spotify_cleaned.rds")
+saveRDS(tiktok_cleaned, "working_tables/tiktok_cleaned.rds")
+saveRDS(billboard_cleaned, "working_tables/billboard_cleaned.rds")
+```
+
+#### SQL
+```{sql}
+#| connection: con
+CREATE TABLE dict_artist AS
+  SELECT * FROM 'initial_tables/dict_artist.csv';
+```
+
+```{sql}
+#| connection: con
+UPDATE spotify_cleaned
+  SET artist = dict_artist.canonical_name
+  FROM dict_artist
+  WHERE spotify_cleaned.artist = dict_artist.alt_name
+```
+
+```{sql}
+#| connection: con
+UPDATE tiktok_cleaned
+  SET artist = dict_artist.canonical_name
+  FROM dict_artist
+  WHERE tiktok_cleaned.artist = dict_artist.alt_name
+```
+
+```{sql}
+#| connection: con
+UPDATE billboard_cleaned 
+  SET artist = dict_artist.canonical_name
+  FROM dict_artist
+  WHERE billboard_cleaned.artist = dict_artist.alt_name
+```
+
+```{sql, include=FALSE}
+#| connection: con
+COPY spotify_cleaned TO 'working_tables/spotify_cleaned_sql.csv' (HEADER, DELIMITER ',');
+COPY tiktok_cleaned TO 'working_tables/tiktok_cleaned_sql.csv' (HEADER, DELIMITER ',');
+COPY billboard_cleaned TO 'working_tables/billboard_cleaned_sql.csv' (HEADER, DELIMITER ',');
+```
+
+#### Python w/ Merge
+
+```{python}
+dict_artist = pd.read_csv('initial_tables/dict_artist.csv')
+
+# Spotify
+spotify_cleaned = spotify_cleaned.merge(dict_artist, left_on = 'artist', right_on = 'alt_name', how = 'left')
+spotify_cleaned['artist'] = np.where( #if the alt_name column has a value then, replace artist with canonical_name
+   spotify_cleaned['alt_name'].notna(), 
+   spotify_cleaned['canonical_name'], 
+   spotify_cleaned['artist'])
+spotify_cleaned = spotify_cleaned.drop(columns = ['canonical_name', 'alt_name'])
+
+# TikTok
+tiktok_cleaned = tiktok_cleaned.merge(dict_artist, left_on = 'artist', right_on = 'alt_name', how = 'left')
+tiktok_cleaned['artist'] = np.where(
+   tiktok_cleaned['alt_name'].notna(), 
+   tiktok_cleaned['canonical_name'], 
+   tiktok_cleaned['artist'])
+tiktok_cleaned = tiktok_cleaned.drop(columns = ['canonical_name', 'alt_name'])
+
+# Billboard
+billboard_cleaned = billboard_cleaned.merge(dict_artist, left_on = 'artist', right_on = 'alt_name', how = 'left')
+billboard_cleaned['artist'] = np.where(
+   billboard_cleaned['alt_name'].notna(), 
+   billboard_cleaned['canonical_name'], 
+   billboard_cleaned['artist'])
+billboard_cleaned = billboard_cleaned.drop(columns = ['canonical_name', 'alt_name'])
+```
+
+#### Python w/ Replace
+
+```{python}
+dict_artist = pd.read_csv('initial_tables/dict_artist.csv', header=0).set_index('alt_name')['canonical_name'].to_dict()
+
+spotify_cleaned['artist'].replace(dict_artist, inplace = True)
+tiktok_cleaned['artist'].replace(dict_artist, inplace = True)
+billboard_cleaned['artist'].replace(dict_artist, inplace = True)
+```
+
+```{python, include=FALSE}
+spotify_cleaned.to_csv("working_tables/spotify_cleaned_py.csv", index=False, header=True, sep=',',)
+tiktok_cleaned.to_csv("working_tables/tiktok_cleaned_py.csv", index=False)
+billboard_cleaned.to_csv("working_tables/billboard_cleaned_py.csv", index=False)
+```
+
+:::
+
+### Examples of the Changes
+
+We did not print the tables above as they would have looked nearly identical to the original tables. Only a few songs out of about 900 songs were changed, so the changes would be difficult to see if the entire table was printed. Here is the same example from above using "Enemy."
+
+::: panel-tabset
+
+#### R
+```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
+spotify_cleaned |>
+  filter(str_detect(song_title, 'Enemy')) #filter for song titles containing "Enemy"
+tiktok_cleaned |>
+  filter(str_detect(song_title, 'Enemy'))
+billboard_cleaned |>
+  filter(str_detect(song_title, 'Enemy'))
+```
+#### SQL
+```{sql}
+#| connection: con
+#| code-fold: true
+#| code-summary: "Spotify"
+SELECT *
+FROM spotify_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+```{sql}
+#| connection: con
+#| code-fold: true
+#| code-summary: "TikTok"
+SELECT *
+FROM tiktok_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+```{sql}
+#| connection: con
+#| code-fold: true
+#| code-summary: "Billboard"
+SELECT *
+FROM billboard_cleaned
+WHERE song_title LIKE '%Enemy%'
+```
+
+#### Python
+```{python}
+#| code-fold: true
+#| code-summary: "Show the code"
+GT(spotify_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+GT(tiktok_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+GT(billboard_cleaned.query('song_title.str.contains("Enemy")', engine='python'))
+```
+
+:::
+

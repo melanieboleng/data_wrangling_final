@@ -1,0 +1,3 @@
+## Conclusion {.unnumbered}
+
+That's it. The data has been wrangled and analysed. I am challenge I feel proud of is discretizing the data. The way that the numbers representing the ranks couldn't be directly compared because they not representing the same info made me go bonkers. The labels were nice to look at. I am also proud of all the pivoting I did in SQL in the "Songs Appearing on Charts" section of the Analysis. I now realize I should have done something like that in R and Python as well. Oh well

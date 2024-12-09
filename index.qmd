@@ -1,0 +1,30 @@
+
+## Project Goals {.unnumbered}
+
+The goal of this project is to explore the intersection of the top songs on the social media platform TikTok and song charts (Spotify top songs and the Billboard Hot 100) for the year 2022. We are interested in analyzing if top songs on TikTok made it to the charts, or vice versa. We are also looking at the tempo of the songs to identify any patterns among the tempo of songs and popularity on TikTok.
+
+The data sources include a table of top songs on Spotify, top songs on TikTok, and the Billboard Hot 100. Both the Spotify and TikTok tables were found on Kaggle and have data scraped from Spotify. The Billboard Hot 100 table was found on Wikipedia with the data originating from Billboard. All three charts rank songs in slightly different ways as explained below.
+
+::: panel-tabset
+### Spotify Data
+
+This table was found on <a href="https://www.kaggle.com/datasets/sveta151/tiktok-popular-songs-2022">Kaggle</a>.The user who uploaded the data to Kaggle used Spotify's API to scrape the data. The table features 17 columns and 646 observations. The grain of the table is a song and its attributes (rank, tempo, artist, dancability, etc.). For the purpose of this project, the most relevant columns are the track_name, artist_name, peak_rank, and tempo. The peak_rank column indicated the highest the song climbed on the chart. A lower number indicated that the song reached a higher ranking.
+
+![Top Songs on Spotify](images/spotify_songs_screenshot.jpg){width="559"}
+
+### TikTok Data
+
+<p>This dataset was found on <a href="https://www.kaggle.com/datasets/sveta151/tiktok-popular-songs-2022">Kaggle</a>. The user who uploaded this data to Kaggle retrieved the data from a playlist on Spotify of trending songs on TikTok. Spotify has an API that allows users to scrape data. This table features 18 columns and 263 observations. The grain of the table is a song and its attributes (artist, mode, track_pop, etc.). The columns most relevant this project are the track_name, artist_name, track_pop, and tempo. The track_pop column represents the popularity of the song. The values in the column are produced and used by Spotify's algorithm, with a higher number indicating that the track was more popular.</p>
+
+![Top Songs on TikTok](images/tiktok_songs_screenshot.jpg){width="563"}
+
+### Billboard Data
+
+This dataset was found on <a href="https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_2022">Wikipedia</a>. The table featured 3 columns and 100 observations. We used the <code>importHTML</code> function on Google Sheets to convert the table from Wikipedia into a csv file. The grain of the table is a song and its attributes. This table is different from the TikTok and Spotify datasets in that it only has three columns: No., Title, and Artist(s). The No. column represents the ranking of the songs, with rankings spanning from 1 to 100. A lower number means that the song ranked higher.
+
+![Top Songs on Billboard Hot 100](images/billboard_screenshot.jpg)
+:::
+
+Both the Spotify and TikTok datasets have many extra columns that will be unnecessary for the scope of this project. There are also variations in the headers of the datasets and in the way that track names and artist names are listed. The easiest way approach these tables is to eliminate the unnecessary columns and rename the headers so that the tables can be compared. Another problems is comparing the rankings. Since all three charts have different ranking systems, the values cannot be directly compared. A solution is to discretize the rankings so that they can be compared.
+
+This project cleans, transforms, and analyses the datasets in R, SQL, and Python. Many of the operations could be performed in the three languages.

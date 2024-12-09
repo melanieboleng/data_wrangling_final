@@ -1,0 +1,242 @@
+## Joins {.unnumbered}
+
+```{r setup r and sql, echo=FALSE}
+#| warning: false
+#| echo: false
+library(readr)
+library(tidyverse)
+library(janitor)
+library(gt)
+library(DBI)
+library(duckdb)
+options(duckdb.enable_rstudio_connection_pane=TRUE)
+
+drv <- duckdb()
+con <- dbConnect(drv)
+library(reticulate)
+# py_install("pandas")
+```
+
+```{python setup python, echo=FALSE, results=FALSE}
+import pandas as pd
+import numpy as np
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+```
+
+```{r, include=FALSE}
+spotify_cleaned <- readRDS("working_tables/spotify_cleaned.rds")
+tiktok_cleaned <- readRDS("working_tables/tiktok_cleaned.rds")
+billboard_cleaned <- readRDS("working_tables/billboard_cleaned.rds")
+```
+
+```{sql, include=FALSE}
+#| connection: con
+CREATE OR REPLACE TABLE spotify_cleaned AS
+  SELECT * FROM 'working_tables/spotify_cleaned_sql.csv';
+CREATE OR REPLACE TABLE tiktok_cleaned AS
+  SELECT * FROM 'working_tables/tiktok_cleaned_sql.csv';
+CREATE OR REPLACE TABLE billboard_cleaned AS
+  SELECT * FROM 'working_tables/billboard_cleaned_sql.csv';
+```
+
+```{python, include=FALSE}
+spotify_cleaned = pd.read_csv("working_tables/spotify_cleaned_py.csv")
+tiktok_cleaned = pd.read_csv("working_tables/tiktok_cleaned_py.csv")
+billboard_cleaned = pd.read_csv("working_tables/billboard_cleaned_py.csv")
+```
+
+
+
+--------------------------------------------------------------------------------
+
+Now that the tables are cleaned and the synonyms are taken care of, we can join the three tables into one big table. One consideration when joining the tables, was ensuring that songs with the same name (but are actually different songs as indicated by the artist) were not combined. We used the song_title and the artist columns as parameters to prevent that mishap from occuring. 
+
+### Examples of Song Titles
+
+Here is a brief example of a song with the same name but different artists. 
+
+::: panel-tabset
+
+#### R
+```{r cover artist example}
+#| code-fold: true
+#| code-summary: "Show the code"
+spotify_cleaned |>
+  filter(song_title == "Cool for the Summer")
+
+tiktok_cleaned |>
+  filter(song_title == "Cool for the Summer")
+```
+
+#### SQL
+```{sql cover artist example s}
+#| connection: con
+#| code-fold: true
+#| code-summary: "Spotify"
+SELECT *
+FROM spotify_cleaned
+WHERE song_title = 'Cool for the Summer'
+```
+
+```{sql cover artist example t}
+#| connection: con
+#| code-fold: true
+#| code-summary: "TikTok"
+SELECT *
+FROM tiktok_cleaned
+WHERE song_title = 'Cool for the Summer'
+```
+
+#### Python
+```{python}
+#| code-fold: true
+#| code-summary: "Spotify"
+spotify_cleaned.query("song_title == 'Cool for the Summer'")
+```
+```{python}
+#| code-fold: true
+#| code-summary: "TikTok"
+tiktok_cleaned.query("song_title == 'Cool for the Summer'")
+```
+:::
+
+
+### Joins/Merges
+
+::: panel-tabset
+
+#### R
+
+We used a <code>full_join</code> and joined by <code>song_title</code> and <code>artist</code>. A <code>full_join</code> meant that all observations from both tables would be kept. We wanted to keep all observations even if it meant that some songs would have NA values for the rankings on the other charts. 
+
+```{r s_and_t}
+# Join the TikTok and Spotify data by song title and call the new table s_and_t.
+s_and_t <- spotify_cleaned |>
+  full_join(tiktok_cleaned, by = join_by(song_title, artist))
+s_and_t
+```
+
+```{r combined}
+# Join the s_and_t table with the billboard table and call the new dataframe combined.
+combined <- s_and_t |>
+  full_join(billboard_cleaned, by = join_by(song_title, artist))
+combined
+```
+
+Because both the Spotify and TikTok tables had a column called <code>tempo</code>, the resulting table had two columns for tempo: <code>tempo.x</code> and <code>tempo.y</code>. We used <code>coalesce</code> to combine the tempo columns into one since the tempo for an individual song would be the same no matter which chart it appears on. <code>coalesce</code> takes the tempo from the first non-missing value in the tempo.x and tempo.y columns and puts value in the new tempo column.
+
+```{r tempo combine}
+combined_cleaned <- combined |>
+  mutate(tempo = coalesce(tempo.x, tempo.y), .keep = "unused")
+combined_cleaned
+```
+
+```{r, include=FALSE}
+saveRDS(combined_cleaned, "working_tables/combined_cleaned.rds")
+```
+
+
+#### SQL Piped
+
+We tried two different methods for joining the tables in SQL. This first method pipes the code blocks together. We used a <code>FULL OUTER JOIN</code> to join by <code>song_title</code> and <code>artist</code>. The <code>FULL OUTER JOIN</code> combines all records from both tables. It joins the data where there are matches and fills in null for the missing data. <code>COALESCE</code> is used here to combine the tempo, song titles, and artists. 
+
+```{sql}
+#| connection: con
+-- combine the spotify and tiktok tables
+CREATE OR REPLACE TABLE s_and_t AS 
+    SELECT *, 
+           COALESCE(tiktok_cleaned.tempo, spotify_cleaned.tempo) AS tempo_st, 
+           COALESCE(tiktok_cleaned.song_title, spotify_cleaned.song_title) AS song_title_st, 
+           COALESCE(tiktok_cleaned.artist, spotify_cleaned.artist) AS artist_st
+    FROM spotify_cleaned
+    FULL OUTER JOIN tiktok_cleaned ON tiktok_cleaned.song_title = spotify_cleaned.song_title AND tiktok_cleaned.artist = spotify_cleaned.artist
+;
+
+-- combine the spotify and tiktok table with the billboard table
+CREATE OR REPLACE TEMP TABLE s_t_b AS
+    SELECT *, 
+           COALESCE(s_and_t.song_title_st, billboard_cleaned.song_title) AS song_title_real, 
+           COALESCE(s_and_t.artist_st, billboard_cleaned.artist) AS artist_real
+    FROM s_and_t
+    FULL OUTER JOIN billboard_cleaned ON billboard_cleaned.song_title = s_and_t.song_title_st AND billboard_cleaned.artist = s_and_t.artist_st
+;
+-- select only the relevant columns
+CREATE OR REPLACE TABLE combined_cleaned_piped AS    
+  SELECT song_title_real AS song_title, 
+         artist_real AS artist, 
+         rank_s, 
+         rank_t, 
+         rank_b, 
+         tempo_st AS tempo
+  FROM s_t_b
+```
+
+#### SQL w/ WITH
+
+The second method uses <code>WITH</code>. The code creates several temporary tables that are then queried. The result of the query is stored as a new table. 
+
+```{sql combine s and t and b - WITH}
+#| connection: con
+--combine the spotify and tiktok tables
+CREATE OR REPLACE TABLE combined_cleaned AS
+  WITH s_t AS (
+      SELECT *, 
+             COALESCE(tiktok_cleaned.tempo, spotify_cleaned.tempo) AS tempo_st, 
+             COALESCE(tiktok_cleaned.song_title, spotify_cleaned.song_title) AS song_title_st, 
+             COALESCE(tiktok_cleaned.artist, spotify_cleaned.artist) AS artist_st
+      FROM spotify_cleaned
+      FULL OUTER JOIN tiktok_cleaned ON tiktok_cleaned.song_title = spotify_cleaned.song_title AND tiktok_cleaned.artist = spotify_cleaned.artist
+  ), s_t_b AS (
+--combine the spotify and tiktok table with the billboard table
+     SELECT *, 
+             COALESCE(s_and_t.song_title_st, billboard_cleaned.song_title) AS song_title_real, 
+             COALESCE(s_and_t.artist_st, billboard_cleaned.artist) AS artist_real
+      FROM s_and_t
+      FULL OUTER JOIN billboard_cleaned ON billboard_cleaned.song_title = s_and_t.song_title_st AND billboard_cleaned.artist = s_and_t.artist_st
+  )
+
+SELECT song_title_real AS song_title, 
+         artist_real AS artist, 
+         rank_s, 
+         rank_t, 
+         rank_b, 
+         tempo_st AS tempo
+FROM s_t_b
+```
+
+```{sql, include=FALSE}
+#| connection: con
+COPY combined_cleaned TO 'working_tables/combined_cleaned_sql.csv' (HEADER, DELIMITER ',');
+```
+
+
+#### Python
+
+The Python version of this operation uses an outer <code>.merge</code> to combine the tables so that all observations are accounted for. The code is read "inside-out," so first the Spotify and TikTok tables are merged, then the Billboard table is merged with the result and called combined. In the process of merging, two new tempo columns (tempo_x and tempo_y) were created. We used .combine_first (very similar to COALESCE is SQL), which combines two dataframe objects by replacing a null value with a non-null value.
+
+```{python}
+#combine the three datasets
+combined = pd.merge(billboard_cleaned, 
+                   (pd.merge(spotify_cleaned, 
+                             tiktok_cleaned, 
+                             how='outer', 
+                             on=['song_title', 'artist'])), 
+                    how='outer', 
+                    on=['song_title', 'artist'])
+
+#combine the tempo columns
+combined = (combined
+        .assign(tempo = lambda df_: df_.tempo_x.combine_first(combined.tempo_y))
+        .drop(columns = ['tempo_x', 'tempo_y'])
+        [['song_title', 'artist', 'rank_s', 'rank_t', 'rank_b', 'tempo']]
+)
+combined
+```
+```{python, include=FALSE}
+combined.to_csv("working_tables/combined_py.csv", index=False)
+```
+
+:::
+
+

@@ -1,0 +1,212 @@
+---
+title: "Crossover Between Top Songs on TikTok and Song Charts"
+format: 
+  html:
+    self-contained: true
+    df-print: paged
+---
+
+<head><link rel="stylesheet" href="stylesheet.css"></head>
+
+<h2>Goals and Data Sources</h2>
+
+<p>The goals of this project is to explore the intersection of the top songs on the social media platform TikTok and song charts (Spotify top songs, and the Billboard Hot 100) for the year 2022. We are interested in analyzing if top songs on TikTok made it to the charts, or vice versa. We also plan to look at the tempo of the songs to identify any patterns among high-tempo songs and ranking on charts.</p>
+
+<p>The data sources include a dataset of top songs on TikTok, top Spotify songs, and the Billboard Hot 100. All three charts rank songs in slightly different ways as explained below.</p>
+
+<h3>TikTok Dataset</h3>
+
+<p>This dataset was found on <a href="https://www.kaggle.com/datasets/sveta151/tiktok-popular-songs-2022">Kaggle</a>. The user who uploaded this data to Kaggle retrieved the data from a playlist on Spotify of trending songs on TikTok. Spotify has an API that allows user to scrape data. This table features 18 columns and 263 observations. The grain of the table is a song and its attributes. The columns most relevant to our goals are the track_name, artist_name, track_pop, and tempo. The track_pop column represents the popularity of the song. The values in the column are produced and used by Spotify's algorithm, with a higher number indicating that the track was more popular.</p>
+
+![Top Songs on TikTok](images/tiktok_songs_screenshot.jpg){width="563"}
+
+<h3>Spotify Dataset</h3>
+
+<p>This dataset was found on <a href="https://www.kaggle.com/datasets/sveta151/tiktok-popular-songs-2022">Kaggle</a>.The user who uploaded the data to Kaggle used Spotify's API to scrape the data. The table features 17 rows and 646 observations. The grain of the table is a song and its attributes. As this data was retrieved from Spotify like the TikTok dataset, the most relevant columns are the same: track_name, artist_name, peak_rank, and tempo. THe peak_rank column indicated the highest the song climbed on the chart. A lower number indicated that the song reached a higher ranking.</p>
+
+![Top Songs on Spotify](images/spotify_songs_screenshot.jpg){width="559"}
+
+<h3>BillboardDataset</h3>
+
+<p>This dataset was found on <a href="https://en.wikipedia.org/wiki/Billboard_Year-End_Hot_100_singles_of_2022">Wikipedia</a>. The table featured 3 columns and 100 observations. We used the importHTML function on Google Sheets to convert the table on Wikipedia into a dataframe we could use. The grain of the table is a song and its attributes. This table is different from the TikTok and Spotify datasets in that it only has three columns: No., Title, and Artist(s). The No. column represents the ranking of the songs, with rankings spanning from 1 to 100.</p>
+
+![Top Songs on Billboard Hot 100](images/billboard_screenshot-01.jpg){width="509"}
+
+<h2>Loading and Cleaning</h2>
+
+```{r setup}
+#| warning: false
+#| echo: false
+library(readr)
+library(tidyverse)
+library(janitor)
+library(gt)
+```
+
+<h3>Read</h3>
+
+<i>Read .csv Files</i>
+
+```{r reading files}
+spotify_top_charts_22 <- read_csv("spotify_top_charts_22.csv", show_col_types = FALSE)
+spotify_top_charts_22
+TikTok_songs_2022 <- read_csv("TikTok_songs_2022.csv", show_col_types = FALSE)
+TikTok_songs_2022
+Billboard_hot_100_year_end_2022 <- read_csv("Billboard_hot_100_year_end_2022.csv", show_col_types = FALSE)
+Billboard_hot_100_year_end_2022
+```
+
+<h3>Clean</h3>
+
+<p>All the datasets are messy. Both the Spotify and TikTok datasets have columns that are not necessary for this project. To keep the tables simple, we cleaned the data to make all three tables as similar as possible.</p>
+
+<i>Clean Spotify Top Charts</i>
+<p>For the Spotify data, we used select() to only keep the relevant columns. We arranged the data so that the rows are listed with the more popular songs near the top. The rank_s column indicated the highest rank the song appeared on the chart, so a lower number indicated that the song was more popular.</p>
+
+```{r}
+spotify_cleaned <- spotify_top_charts_22 |> 
+  clean_names() |> #clean the column headers
+  select(track_name, artist_names, peak_rank, tempo) |> #filter only certain columns
+  rename(song_title = track_name, artist = artist_names, rank_s = peak_rank) |> #rename the column headers
+  arrange(rank_s) #order from most to least popular
+spotify_cleaned
+```
+
+</br > <i>Clean TikTok Top Songs</i>
+<p>Similar to the Spotify dataset, we kept only the relevant columns and renamed them to be the same as the Spotify dataset. The rank_t column indicated the popularity of a song, with a higher value indicating that the song archieved greater popularity.</p>
+
+```{r}
+tiktok_cleaned <- TikTok_songs_2022 |>
+  clean_names() |> #clean the column headers
+  select(track_name, artist_name, track_pop, tempo) |> #filter for certain columns
+  rename(song_title = track_name, artist = artist_name, rank_t = track_pop) |> #rename the column headers
+  arrange(desc(rank_t)) #arrange by populatity
+tiktok_cleaned
+```
+
+</br > <i>Clean Billboard Hot 100</i>
+
+```{r}
+billboard_cleaned <- Billboard_hot_100_year_end_2022 |>
+  clean_names() |> #clean the column headers
+  select(title, artist_s, no) |> #reorder the columns
+  rename(song_title = title, rank_b = no, artist = artist_s) |> #rename the column headers
+  mutate(song_title = str_replace_all(song_title, '"', '')) #take quotations off song titles
+billboard_cleaned
+```
+
+<h2>Joins</h2>
+
+<p>We chose to use full joins in order to ensure that songs that had a cover singer listed as an artist were kept separate from the song of the same name with the original singer listed.</p>
+
+</br > <i>Join the tiktok dataframe and spotify data by song title and call the new dataframe s_and_t.</i>
+
+```{r}
+s_and_t <- spotify_cleaned |>
+  full_join(tiktok_cleaned, by = join_by(song_title, artist))
+s_and_t
+```
+
+</br > <i>Join the s_and_t dataframe with the billboard dataframe and call the new dataframe combined.</i>
+
+```{r}
+combined <- s_and_t |>
+  full_join(billboard_cleaned, by = join_by(song_title, artist))
+combined
+```
+
+</br > <i>Combine the two tempo columns into one.</i>
+
+```{r}
+combined_cleaned <- combined |>
+  mutate(tempo = coalesce(tempo.x, tempo.y), .keep = "unused")
+combined_cleaned
+```
+
+</br >
+
+<h3>Clean the Join</h3>
+
+<i>Create a dataframe to handle synonyms in song_title</i>
+
+```{r}
+song_title_syn <- tribble (
+  ~canonical_name, ~alt_name,
+  "Enemy (with JID) - from the series Arcane League of Legends", "Enemy",
+  "BREAK MY SOUL", "Break My Soul", 
+  "MAMIII", "Mamii",
+  "Bam Bam", "Bam Bam (feat. Ed Sheeran)"
+)
+```
+
+<i>Recode the combined table to have the canonical names of the songs</i>
+
+```{r}
+combined_cleaned |>
+  left_join(song_title_syn, by = join_by(song_title == canonical_name)) |>
+  mutate(song_title = case_when(
+    alt_name > 0  ~ alt_name,
+    .default = song_title
+  )
+  )
+```
+
+<i>create a dataframe to handle synonyms in artist</i>
+
+```{r}
+artist_syn <- tribble (
+  ~canonical_name, ~alt_name,
+  "24kGoldn, iann dior", "24kGoldn",
+  "Amaarae, Kali Uchis, Moliy", "Amaarae",
+  "Becky G, KAROL G", "Becky G and Karol G", 
+  "Becky G, KAROL G", "Becky G",
+  "Camila Cabello, Ed Sheeran", "Camila Cabello featuring Ed Sheeran",
+  "Camila Cabello, Ed Sheetan", "Camila Cabello"
+)
+```
+
+<h2>Analysis</h2>
+
+<h3>Songs on TikTok on Billboard and Spotify Charts</h3>
+
+<p>What songs were popoular on TikTok that also appeared on both the Spotify and Billboard charts? By excluding the NA values, this gives a dataframe of eleven songs that appear on all three charts.</p>
+
+```{r}
+songs_on_all_charts <- combined_cleaned |> #make a new dataframe with popular songs on TikTok that also appear on other charts
+  filter(!is.na(rank_t) & !is.na(rank_s) & !is.na(rank_b))
+
+gt(songs_on_all_charts) |> #make the table look nice
+  tab_header(
+    title="Popular Songs on TikTok appearing on Other Charts"
+  )
+```
+
+<h3>TikTok Songs and Tempo</h3>
+
+<p>Did popular songs on TikTok have higher tempos? Many viral trends on TikTok involve creators doing a short dance. We wonder if there is a relationship to the tempo of songs and what which songs are popular.</p>
+
+<i>Make a plot</i>
+
+```{r warning=FALSE}
+combined_cleaned |>
+  ggplot(data = combined_cleaned, mapping = aes(x = rank_t, y = tempo)) +
+  geom_point()
+```
+
+<p>As seen from the plot, there does not appear to be a correlation between songs being popular on TikTok and tempo.</p>
+
+<h3>Problems</h3>
+
+<p>A problem that we ran into was dealing with the artist names. The Spotify dataset listed multiple artists in one column, and if there were multiple artists, the names were separated with commas. On the other hand, the TikTok dataset only listed one artist if there were multiple artists for the song. Another problem with the datasets was that some songs listed were covers and only the cover artist was listed. These problems made combining the datasets difficult because identifying unique songs was not as simple as using the song title and artist. We used a full_join rather than a left_join to ensure that all songs (even covers) were accounted for. An example is the song "Cool for the Summer," which shows up twice in the combined_cleaned dataset. One row has the artist as Demi Lovato and the other has Alex D'Rosso.</p>
+
+```{r}
+combined_cleaned |>
+  filter(song_title == "Cool for the Summer")
+```
+
+<p>Using a full_join resulted in the same song with the same artist appearing multiple times in the data frame if there were minor variations of the artist's name. Here is an example of the problem with the song "Enemy" by Imagine Dragons.</p>
+
+```{r}
+combined_cleaned |>
+  filter(str_detect(song_title, 'Enemy'))
+```

@@ -1,0 +1,257 @@
+## Analysis {.unnumbered}
+
+```{r setup r and sql, echo=FALSE}
+#| warning: false
+#| echo: false
+library(readr)
+library(tidyverse)
+library(janitor)
+library(gt)
+library(DBI)
+library(duckdb)
+options(duckdb.enable_rstudio_connection_pane=TRUE)
+
+drv <- duckdb()
+con <- dbConnect(drv)
+library(reticulate)
+# py_install("pandas")
+# py_install("matplotlib")
+```
+
+```{python setup python, echo=FALSE, results=FALSE}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import great_tables as gt
+import warnings
+from great_tables import GT
+warnings.simplefilter(action='ignore', category=FutureWarning)
+```
+
+```{r, include=FALSE}
+spotify_cleaned <- readRDS("working_tables/spotify_cleaned.rds")
+tiktok_cleaned <- readRDS("working_tables/tiktok_cleaned.rds")
+billboard_cleaned <- readRDS("working_tables/billboard_cleaned.rds")
+combined_cleaned <- readRDS("working_tables/combined_cleaned.rds")
+```
+
+```{sql, include=FALSE}
+#| connection: con
+CREATE OR REPLACE TABLE spotify_cleaned AS
+  SELECT * FROM 'working_tables/spotify_cleaned_sql.csv';
+CREATE OR REPLACE TABLE tiktok_cleaned AS
+  SELECT * FROM 'working_tables/tiktok_cleaned_sql.csv';
+CREATE OR REPLACE TABLE billboard_cleaned AS
+  SELECT * FROM 'working_tables/billboard_cleaned_sql.csv';
+CREATE OR REPLACE TABLE combined_cleaned AS
+  SELECT * FROM 'working_tables/combined_cleaned_sql.csv';
+```
+
+```{python, include=FALSE}
+spotify_cleaned = pd.read_csv("working_tables/spotify_cleaned_py.csv")
+tiktok_cleaned = pd.read_csv("working_tables/tiktok_cleaned_py.csv")
+billboard_cleaned = pd.read_csv("working_tables/billboard_cleaned_py.csv")
+combined = pd.read_csv("working_tables/combined_py.csv")
+```
+
+
+
+--------------------------------------------------------------------------------
+
+
+### Songs on TikTok on both the Billboard and Spotify Charts
+
+What songs were popoular on TikTok that also appeared on both the Spotify and Billboard charts? 
+
+::: panel-tabset
+
+#### R
+
+By excluding the NA values, this gives a dataframe of eleven songs that appear on all three charts.
+
+```{r songs on all charts}
+# make a new dataframe with popular songs on TikTok that also appear on other charts
+songs_on_all_charts <- combined_cleaned[complete.cases(combined_cleaned[ , c('rank_s', 'rank_t', 'rank_b')]), ]
+```
+
+```{r songs on all charts table}
+# make the table look nice
+gt(songs_on_all_charts) |>
+  tab_header(
+    title="Popular Songs on TikTok appearing on Other Charts"
+  )
+```
+
+#### SQL
+
+This is essentially the same as the R version -- excluding null values results in the songs that appeared on all charts. 
+
+```{sql}
+#| connection: con
+SELECT *,
+FROM combined_cleaned
+WHERE rank_s IS NOT NULL 
+  AND rank_t IS NOT NULL 
+  AND rank_b IS NOT NULL
+```
+
+#### Python
+
+Again, this excludes the null values. 
+
+```{python}
+all_charts = combined[combined[['rank_s', 'rank_t', 'rank_b']].notnull().all(1)]
+
+GT(all_charts) # makes the table look nice
+```
+
+:::
+
+### Songs Appearing on Charts
+
+How many songs appeared on all three charts? How many on just TikTok and Spotify? How many on just Billboard and Spotify? etc.
+
+::: panel-tabset
+
+#### R
+
+To calculate these values, we first created new columns (one for each chart) that held either TRUE or FALSE depending on whether the song appeared on the corresponding chart. These new columns allowed us to use the summarize function to calculate how many true values appeared in each combination of columns. The results count how many songs appear on the various combinations of charts.
+
+```{r}
+combined_cleaned |>
+  mutate( #create new columns that identify whether a song appears on the chart using TRUE/FALSE
+    on_tiktok = !is.na(rank_t), #identifies the non-NA songs appearing on the tiktok chart
+    on_spotify = !is.na(rank_s), #identifies the non-NA songs appearing on the spotify
+    on_billboard = !is.na(rank_b) #identifies the non-NA songs appearing on the billboard chart
+  ) |>
+  summarize( #calculates the total number of TRUE values for each combination of charts
+    only_tiktok = sum(on_tiktok & !on_spotify & !on_billboard),
+    only_spotify = sum(!on_tiktok & on_spotify & !on_billboard),
+    only_billboard = sum(!on_tiktok & !on_spotify & on_billboard),
+    only_tiktok_and_spotify = sum(on_tiktok & on_spotify & !on_billboard),
+    only_tiktok_and_billboard = sum(on_tiktok & !on_spotify & on_billboard),
+    only_spotify_and_billboard = sum(!on_tiktok & on_spotify & on_billboard),
+    all_three = sum(on_tiktok & on_spotify & on_billboard)
+  )
+```
+
+#### SQL w/ Pivot
+
+We came up with two different methods to find the answer. The first uses CTEs and pivots to calculate the counts.
+
+```{sql totals with pivot}
+#| connection: con
+CREATE OR REPLACE TABLE total_counts_with AS
+WITH cte_1 AS(
+-- unpivot the table to make it longer
+  UNPIVOT combined_cleaned
+    ON rank_s, rank_t, rank_b
+    INTO
+      NAME charts
+      VALUE rank
+), cte_2 AS(
+-- the value in the rank column does not matter for this analysis, so we did not include it in SELECT
+  SELECT song_title, artist, charts, tempo
+  FROM cte_1
+), cte_3 AS(
+-- pivot to make the table wider
+  PIVOT_WIDER cte_2
+  ON charts
+  USING first(charts)
+), cte_4 AS(
+-- concatenate the three charts into one column
+  SELECT CONCAT(rank_s, ', ', rank_t, ', ', rank_b) AS charts
+  FROM cte_3
+)
+-- group by the new charts column and count how many songs appear on each combination of charts
+  SELECT charts, COUNT(*) AS counts
+  FROM cte_4
+  GROUP BY charts
+```
+
+#### SQL w/ Filter
+
+The second method uses COUNT(*), FILTER, and WHERE. Each line counts the number of rows that meet the condition in WHERE.
+
+```{sql totals with filter}
+#| connection: con
+CREATE OR REPLACE TABLE total_counts AS
+SELECT COUNT(*) FILTER (WHERE rank_s IS NOT NULL AND rank_t IS NULL AND rank_b IS NULL) AS only_s,
+       COUNT(*) FILTER (WHERE rank_s IS NULL AND rank_t IS NOT NULL AND rank_b IS NULL) AS only_t,
+       COUNT(*) FILTER (WHERE rank_s IS NULL AND rank_t IS NULL AND rank_b IS NOT NULL) AS only_b,
+       COUNT(*) FILTER (WHERE rank_s IS NOT NULL AND rank_t IS NOT NULL AND rank_b IS NULL) AS only_spotify_and_tiktok,
+       COUNT(*) FILTER (WHERE rank_s IS NULL AND rank_t IS NOT NULL AND rank_b IS NOT NULL) AS only_tiktok_and_billboard,
+       COUNT(*) FILTER (WHERE rank_s IS NOT NULL AND rank_t IS NULL AND rank_b IS NOT NULL) AS only_spotify_and_billboard,
+       COUNT(*) FILTER (WHERE rank_s IS NOT NULL AND rank_t IS NOT NULL AND rank_b IS NOT NULL) AS all_three
+FROM combined_cleaned
+```
+
+#### Python
+
+To create the output, we created a new dataframe with the labels as column headers and all the values set to zero. The we replaced each of the zeros with the appropriate counts. We used .sum() to count the non NA values for each column.
+
+```{python}
+(combined.
+  melt(id_vars = ["song_title"], var_name = "charts", value_name = "rank")
+)
+```
+
+
+```{python}
+data = {'only_spotify': [0], 'only_tiktok': [0], 'only_billboard': [0], 'only_spotify_and_tiktok': [0], 'only_tiktok_and_billboard': [0], 'only_spotify_and_billboard': [0], 'all_three': [0]}
+totals = pd.DataFrame(data)
+
+totals['only_spotify'] = [(combined['rank_s'].notna() &
+                           combined['rank_t'].isna() &
+                           combined['rank_b'].isna()).sum()]
+totals['only_tiktok'] = [(combined['rank_s'].isna() &
+                          combined['rank_t'].notna() &
+                          combined['rank_b'].isna()).sum()]
+totals['only_billboard'] = [(combined['rank_s'].isna() &
+                             combined['rank_t'].isna() &
+                             combined['rank_b'].notna()).sum()]
+totals['only_spotify_and_tiktok'] = [(combined['rank_s'].notna() &
+                                      combined['rank_t'].notna() &
+                                      combined['rank_b'].isna()).sum()]
+totals['only_tiktok_and_billboard'] = [(combined['rank_s'].isna() &
+                                        combined['rank_t'].notna() &
+                                        combined['rank_b'].notna()).sum()]
+totals['only_spotify_and_billboard'] = [(combined['rank_s'].notna() &
+                                         combined['rank_t'].isna() &
+                                         combined['rank_b'].notna()).sum()]
+totals['all_three'] = [(combined['rank_s'].notna() &
+                        combined['rank_t'].notna() &
+                        combined['rank_b'].notna()).sum()]
+
+GT(totals)
+```
+
+:::
+
+### TikTok Songs and Tempo
+
+Did popular songs on TikTok have higher tempos? Many viral trends on TikTok involve creators doing a short dance. We wonder if there is a relationship to the tempo of songs and what which songs are popular. We used a simple scatter plot to visualize the data.
+
+::: panel-tabset
+
+#### R
+```{r warning=FALSE}
+combined_cleaned |>
+  ggplot(data = combined_cleaned, mapping = aes(x = rank_t, y = tempo)) +
+  geom_point() +
+  labs(x = "Song Rank on TikTok", y = "Tempo of Song")
+```
+
+#### SQL
+
+Nothing here since SQL doesn't visualize.
+
+#### Python
+
+```{python}
+combined.plot.scatter(x="rank_t", y="tempo").set(xlabel="Rank on TikTok", ylabel="Tempo (BPM)", title="Tempo of Popular Songs on TikTok")
+```
+
+As seen from the plot, there does not appear to be a correlation between songs being popular on TikTok and tempo. In the original data, some of the songs had a rank of 0. The documentation does not describe why that some songs included in the chart have a rank of 0.
+
+:::

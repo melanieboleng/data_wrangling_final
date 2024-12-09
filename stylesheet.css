@@ -1,0 +1,19 @@
+h2 {
+  background-color:LightBlue;
+}
+
+h3 {
+  background-color:LightYellow;
+}
+
+body { min-height: 100vh; }
+
+.col_name {
+  background-color: Plum;
+  color: Purple;
+}
+
+.function {
+  background-color: LightGreen;
+  color: DarkGreen;
+}
